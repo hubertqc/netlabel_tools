@@ -118,14 +118,39 @@ function nlbl_load() {
 	local ret_rc=0
 	local line_num=0
 	local line
+	local ipaddr_list
+
 	while read line; do
 		line_num=$(($line_num + 1))
 		# skip comments and blank lines
 		echo "$line" | egrep '^#|^$' >& /dev/null && continue
 
-		# perform the configuration
-		output=$(netlabelctl $line 2>&1)
+		# check, and retrieve if needed, interface placeholder
+		ipaddr_list=""
+		echo "$line" | egrep -q 'address:%(4|6|any)-[[:alnum:]]+'
 		rc=$?
+		if [[ $rc -eq 0 ]] ; then
+			ipproto=""
+			iface=$( echo "$line" | sed -E 's/.*[[:blank:]]address:%(4|6|any)-([[:alnum:]]+).*$/\2/' )
+			echo "$line" | egrep -q 'address:%4-' && ipproto="-4"
+			echo "$line" | egrep -q 'address:%6-' && ipproto="-6"
+
+			ipaddr_list=$( ip $ipproto -o address show dev "$iface" | cut -d " " -f 7 | cut -d "/" -f 1 )
+		fi
+
+		# perform the configuration replacing interface placeholder if needed
+
+		if [[ -n "$ipaddr_list" ]] ; then
+			for ipaddr in $ipaddr_list ; do
+				new_line=$( echo "$line" | sed -E "s/%(4|6|any)-[[:alnum:]]+/$ipaddr/" )
+				output=$(netlabelctl $new_line 2>&1)
+				rc=$?
+			done
+		else
+			output=$(netlabelctl $line 2>&1)
+			rc=$?
+		fi
+
 		if [[ $rc -ne 0 ]]; then
 			ret_rc=1
 			echo "error: line $line_num \"$line\""
